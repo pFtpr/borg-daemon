@@ -1,0 +1,41 @@
+
+# Uncomment either of these to include external configuration files. These will be parsed first (in the same order as
+# specified), allowing later files to overwrite options in previous' ones. This file is processed last.
+# Paths are relative to the config file they reside in
+#imports = 'base_config.toml'
+#imports = ['base_config_1.toml', 'base_config_2.toml']
+
+[backup]
+# the path to the backup repository
+repository='user@host:backups/borg'
+
+# The command to use for retrieving the password. If no command is specified the daemon will ask for a password
+#passphrase_command='echo mysupersafepassword123'
+
+# the name of the archive
+name = '{hostname}-{now}'
+
+# the directory to create a backup of
+backup_directory = '/home/me'
+
+# Directories considered to be caches. borg-daemon will automatically place "CAHEDIR.DAT" files in these. More
+# information about these files can be found at http://www.brynosaurus.com/cachedir/spec.html
+# Paths are relative to the backed-up directory.
+cachedirs = [
+    '.cache',
+    '.someprogram-v*/cache'  # paths can be globs
+]
+
+excludes = [
+    'Downloads',
+    '.local/share/Trash',
+]
+
+[borg]
+binary='/usr/bin/borg'
+
+# custom command-line flags. These will overwrite any options set by the daemon
+flags = [
+    '--exclude-caches',
+    '--compression', 'lz4'
+]
