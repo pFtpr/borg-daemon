@@ -1,3 +1,4 @@
+# Sample borg-daemon configuration file
 
 # Uncomment either of these to include external configuration files. These will be parsed first (in the same order as
 # specified), allowing later files to overwrite options in previous' ones. This file is processed last.
@@ -5,13 +6,20 @@
 #imports = 'base_config.toml'
 #imports = ['base_config_1.toml', 'base_config_2.toml']
 
-[backup]
+[borg]
+binary='/usr/bin/borg'
+
 # the path to the backup repository
 repository='user@host:backups/borg'
 
 # The command to use for retrieving the password. If no command is specified the daemon will ask for a password
 #passphrase_command='echo mysupersafepassword123'
 
+[daemon]
+# TODO: the daemon currently creates one backup per day, no configuration possible
+
+
+[create]
 # the name of the archive
 name = '{hostname}-{now}'
 
@@ -21,6 +29,7 @@ backup_directory = '/home/me'
 # Directories considered to be caches. borg-daemon will automatically place "CAHEDIR.DAT" files in these. More
 # information about these files can be found at http://www.brynosaurus.com/cachedir/spec.html
 # Paths are relative to the backed-up directory.
+# Note that you still have to give the "--exclude-caches" flag to borg to ignore directories in here
 cachedirs = [
     '.cache',
     '.someprogram-v*/cache'  # paths can be globs
@@ -31,11 +40,18 @@ excludes = [
     '.local/share/Trash',
 ]
 
-[borg]
-binary='/usr/bin/borg'
-
-# custom command-line flags. These will overwrite any options set by the daemon
+# custom command-line flags. These will be adder after those set by the daemon
 flags = [
     '--exclude-caches',
     '--compression', 'lz4'
 ]
+
+
+[prune]
+flags = [
+    '--prefix', '{hostname}-',
+    '--keep-daily', '7',
+    '--keep-weekly', '4',
+    '--keep-monthly', '6',
+]
+

@@ -1,9 +1,13 @@
+#!/usr/bin/python3
+
 from pathlib import Path
 import toml
 import sys
+import os
 import typing
 import argparse
 import subprocess
+import getpass
 
 
 __version__ = (0, 1)
@@ -57,7 +61,7 @@ def parse_argv():
     parser = argparse.ArgumentParser(description='Easily run borg using short configuration files')
     parser.add_argument('operation',
                         type=str,
-                        choices=('backup', 'prune', 'single', 'daemon'),
+                        choices=('create', 'prune', 'list', 'single', 'daemon'),
                         help='the operation to perform')
     parser.add_argument('config',
                         type=str,
@@ -66,55 +70,49 @@ def parse_argv():
     return parser.parse_args()
 
 
-def mark_caches(path_root: Path, caches: typing.List[typing.Union[str, Path]]):
+def mark_caches(path_root: Path, caches: typing.List[str]):
+    # expand the globs
+    cache_dirs = []
+
     for cache in caches:
-        dir_path = Path(path_root, cache)
+        cache_dirs += path_root.glob(cache)
+
+    for dir_path in cache_dirs:
         tag_path = dir_path / 'CACHEDIR.TAG'
 
+        # file exists, ensure it is valid
         if tag_path.exists():
+            assert tag_path.is_file()
             contents = tag_path.open().read()
             assert contents.startswith(CACHE_TAG_STARTLINE)
 
-        else:
+        # directory exist, but the file doesn't - create it
+        elif dir_path.exists():
             print('Marking {} as cache directory'.format(tag_path))
             with tag_path.open('w') as tag_file:
                 tag_file.write(CACHE_TAG_CONTENTS)
 
 
-def run_borg(action: str, config: dict):
-    backup_directory = config['backup']['backup_directory']
+def run_borg(action: str,
+             config: dict,
+             flags: typing.List[str],
+             post_flags: typing.List[str],
+             archive_name,
+             env):
 
-    base_command = [
-        # borg binary
-        config['borg']['binary'],
+    full_repo_name = config['borg']['repository']
+    if archive_name is not None:
+        full_repo_name += '::' + archive_name
 
-        # what to do ("create", "prune", ...)
-        action,
-
-        # default flags
-        '--progress',
-        '--filter', 'AME',
-        '--list',
-        '--show-rc',
-    ]
-
-    excludes = []
-    for exclude in config['backup'].get('excludes', []):
-        excludes.append('--exclude')
-        excludes.append(str(Path(backup_directory, exclude)))
-
-    full_repo_name = '{}::{}'.format(config['backup']['repository'],
-                                     config['backup']['name'])
-
-    command = base_command + \
-              config['borg'].get('flags', []) + \
-              excludes + \
+    command = [config['borg']['binary']] + \
+              [action] + \
+              flags + \
               [full_repo_name] + \
-              [config['backup']['backup_directory']]
+              post_flags
 
     print('Running borg: \'{}\''.format('\' \''.join(command)))
 
-    proc = subprocess.Popen(command)
+    proc = subprocess.Popen(command, env=env)
     proc.communicate()
 
     if proc.returncode != 0:
@@ -122,41 +120,77 @@ def run_borg(action: str, config: dict):
         exit(proc.returncode)
 
 
-def backup(config: dict):
-    run_borg('create', config)
+def create(config: dict, env):
+    backup_directory = config['create']['backup_directory']
+
+    excludes = []
+    for exclude in config['create'].get('excludes', []):
+        excludes.append('--exclude')
+        excludes.append(str(Path(backup_directory, exclude)))
+
+    default_flags = [
+        '--progress',
+        '--filter', 'AME',
+        '--list',
+        '--show-rc',
+    ]
+
+    flags = \
+        default_flags + \
+        excludes + \
+        config['borg'].get('flags', [])
+
+    post_flags = [config['create']['backup_directory']]
+
+    run_borg('create', config, flags, post_flags, config['create']['name'], env)
 
 
-def prune(config: dict):
-    raise NotImplementedError()
+def prune(config: dict, env):
+    flags = config['prune'].get('flags', [])
+    post_flags = []
+    run_borg('prune', config, flags, post_flags, None, env)
 
 
-def run_single(config: dict):
-    backup(config)
-    prune(config)
+def list(config: dict, env):
+    run_borg('list', config, [], [], None, env)
 
 
-def run_daemon(config: dict):
+def run_single(config: dict, env):
+    create(config, env)
+    prune(config, env)
+
+
+def run_daemon(config: dict, env):
     while True:
-        lasttime = get_time_of_last_backup()
+        backup_times = get_backup_times()
         raise NotImplementedError()
-        run_single()
+        run_single(config)
 
 
 def main():
     arguments = parse_argv()
     config = parse_config(Path(arguments.config))
 
-    mark_caches(Path(config['backup']['backup_directory']),
-                config.get('cachedirs', []))
+    mark_caches(Path(config['create']['backup_directory']),
+                config['create'].get('cachedirs', []))
 
-    if arguments.operation == 'backup':
-        backup(config)
+    # set the passphrase environment
+    try:
+        env = dict(os.environ, BORG_PASSCOMMAND=config['borg']['passphrase_command'])
+    except KeyError:
+        env = dict(os.environ, BORG_PASSPHRASE=getpass.getpass())
+
+    # dispatch the task
+    if arguments.operation == 'create':
+        create(config, env)
     elif arguments.operation == 'prune':
-        prune(config)
+        prune(config, env)
+    elif arguments.operation == 'list':
+        list(config, env)
     elif arguments.operation == 'single':
-        run_single(config)
+        run_single(config, env)
     elif arguments.operation == 'daemon':
-        run_daemon(config)
+        run_daemon(config, env)
     else:
         assert False, arguments.operation
 
