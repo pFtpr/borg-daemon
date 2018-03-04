@@ -8,6 +8,8 @@ import typing
 import argparse
 import subprocess
 import getpass
+from time import sleep
+from datetime import datetime, timedelta
 
 
 __version__ = (0, 1)
@@ -88,7 +90,7 @@ def mark_caches(path_root: Path, caches: typing.List[str]):
 
         # directory exist, but the file doesn't - create it
         elif dir_path.exists():
-            print('Marking {} as cache directory'.format(tag_path))
+            print('TAG:     marking {} as cache directory'.format(tag_path))
             with tag_path.open('w') as tag_file:
                 tag_file.write(CACHE_TAG_CONTENTS)
 
@@ -100,7 +102,7 @@ def run_borg(action: str,
              archive_name,
              env):
 
-    full_repo_name = config['borg']['repository']
+    full_repo_name = str(Path(config['borg']['repository']).resolve())
     if archive_name is not None:
         full_repo_name += '::' + archive_name
 
@@ -110,23 +112,26 @@ def run_borg(action: str,
               [full_repo_name] + \
               post_flags
 
-    print('Running borg: \'{}\''.format('\' \''.join(command)))
+    print('RUN:     \'{}\''.format('\' \''.join(command)))
 
     proc = subprocess.Popen(command, env=env)
     proc.communicate()
 
-    if proc.returncode != 0:
-        print('ERROR: borg returned with status code {}'.format(proc.returncode))
-        exit(proc.returncode)
+    if proc.returncode == 0:
+        print('SUCCESS: {} done'.format(action))
+    else:
+        print('ERROR:   borg returned with status code {}'.format(proc.returncode))
+
+    return proc.returncode
 
 
-def create(config: dict, env):
+def run_create(config: dict, env):
     backup_directory = config['create']['backup_directory']
 
     excludes = []
     for exclude in config['create'].get('excludes', []):
         excludes.append('--exclude')
-        excludes.append(str(Path(backup_directory, exclude)))
+        excludes.append(str(Path(backup_directory, exclude).resolve()))
 
     default_flags = [
         '--progress',
@@ -142,29 +147,46 @@ def create(config: dict, env):
 
     post_flags = [config['create']['backup_directory']]
 
-    run_borg('create', config, flags, post_flags, config['create']['name'], env)
+    return run_borg('create', config, flags, post_flags, config['create']['name'], env)
 
 
-def prune(config: dict, env):
+def run_prune(config: dict, env):
     flags = config['prune'].get('flags', [])
     post_flags = []
-    run_borg('prune', config, flags, post_flags, None, env)
+    return run_borg('prune', config, flags, post_flags, None, env)
 
 
-def list(config: dict, env):
-    run_borg('list', config, [], [], None, env)
+def run_list(config: dict, env):
+    return run_borg('list', config, [], [], None, env)
 
 
 def run_single(config: dict, env):
-    create(config, env)
-    prune(config, env)
+    result = run_create(config, env)
+    if result != 0:
+        return result
+
+    return run_prune(config, env)
 
 
 def run_daemon(config: dict, env):
+    last_known_success = datetime.fromtimestamp(0)
+
     while True:
-        backup_times = get_backup_times()
-        raise NotImplementedError()
-        run_single(config)
+        now = datetime.now()
+        # calculate the previous backup target
+        prev_target = datetime.now().replace(hour=0, minute=0, second=0)
+
+        # check whether a new backup is required
+        due = last_known_success < prev_target
+
+        if due:
+            success = run_single(config, env)
+
+            if success:
+                last_known_success = now
+
+        # yield
+        sleep(60 * 20)
 
 
 def main():
@@ -178,15 +200,15 @@ def main():
     try:
         env = dict(os.environ, BORG_PASSCOMMAND=config['borg']['passphrase_command'])
     except KeyError:
-        env = dict(os.environ, BORG_PASSPHRASE=getpass.getpass())
+        env = dict(os.environ, BORG_PASSPHRASE=getpass.getpass('borg repository password: '))
 
     # dispatch the task
     if arguments.operation == 'create':
-        create(config, env)
+        run_create(config, env)
     elif arguments.operation == 'prune':
-        prune(config, env)
+        run_prune(config, env)
     elif arguments.operation == 'list':
-        list(config, env)
+        run_list(config, env)
     elif arguments.operation == 'single':
         run_single(config, env)
     elif arguments.operation == 'daemon':
