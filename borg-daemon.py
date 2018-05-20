@@ -10,13 +10,14 @@ import subprocess
 import getpass
 from time import sleep
 from datetime import datetime, timedelta
+import logging
 
 
 __version__ = (0, 1)
 
 
 CACHE_TAG_CONTENTS = '''Signature: 8a477f597d28d172789f06886806bc55
-# This file is a cache directory tag created.
+# This file is a cache directory tag.
 # For information about cache directory tags, see:
 #	http://www.brynosaurus.com/cachedir/
 #
@@ -90,7 +91,7 @@ def mark_caches(path_root: Path, caches: typing.List[str]):
 
         # directory exist, but the file doesn't - create it
         elif dir_path.exists():
-            print('TAG:     marking {} as cache directory'.format(tag_path))
+            logging.info('marking {} as cache directory'.format(dir_path))
             with tag_path.open('w') as tag_file:
                 tag_file.write(CACHE_TAG_CONTENTS)
 
@@ -112,17 +113,17 @@ def run_borg(action: str,
               [full_repo_name] + \
               post_flags
 
-    print('RUN:     \'{}\''.format('\' \''.join(command)))
+    logging.info('\'{}\''.format('\' \''.join(command)))
 
     proc = subprocess.Popen(command, env=env)
     proc.communicate()
 
     if proc.returncode == 0:
-        print('SUCCESS: {} done'.format(action))
+        logging.info('{} done'.format(action))
     else:
-        print('ERROR:   borg returned with status code {}'.format(proc.returncode))
+        logging.error('borg returned with status code {}'.format(proc.returncode))
 
-    return proc.returncode
+    return proc.returncode == 0
 
 
 def run_create(config: dict, env):
@@ -162,8 +163,8 @@ def run_list(config: dict, env):
 
 def run_single(config: dict, env):
     result = run_create(config, env)
-    if result != 0:
-        return result
+    if not result:
+        return False
 
     return run_prune(config, env)
 
@@ -174,22 +175,38 @@ def run_daemon(config: dict, env):
     while True:
         now = datetime.now()
         # calculate the previous backup target
-        prev_target = datetime.now().replace(hour=0, minute=0, second=0)
+        # one backup per day
+        # prev_target = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # next_target = prev_target + timedelta(days=1)
+
+        # one backup every n hours
+        n = 3
+        prev_hour = n * (now.hour // n)
+        prev_target = now.replace(hour=prev_hour, minute=0, second=0, microsecond=0)
+        next_target = prev_target + timedelta(hours=n)
+
 
         # check whether a new backup is required
         due = last_known_success < prev_target
 
         if due:
+            logging.info('creating backup for {}'.format(prev_target))
             success = run_single(config, env)
 
             if success:
                 last_known_success = now
+                logging.info('next backup scheduled for {}'.format(next_target))
 
         # yield
-        sleep(60 * 20)
+        sleep_time = (next_target - datetime.now()).total_seconds()
+        sleep_time = max(sleep_time, 0)  # time has passed, the next target may lie in the past
+        sleep_time = min(60 * 15, sleep_time)
+        sleep(sleep_time)
 
 
 def main():
+    logging.basicConfig(format='%(asctime)s    %(levelname)s    %(message)s', level=logging.INFO)
+
     arguments = parse_argv()
     config = parse_config(Path(arguments.config))
 
